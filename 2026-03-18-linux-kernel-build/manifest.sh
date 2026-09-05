@@ -100,6 +100,11 @@ function create_disk()
         mkdir -p "$BUILD/esp/EFI/BOOT/"
         cp "$(nix-build '<nixpkgs>' -A systemd)/lib/systemd/boot/efi/systemd-bootx64.efi" "$BUILD/esp/EFI/BOOT/BOOTX64.EFI"
 
+        mkdir -p "$BUILD/esp/loader/"
+        cat <<EOF > "$BUILD/esp/loader/loader.conf"
+timeout 15
+console-mode max
+EOF
 
         dd if=/dev/zero of=$esp_img bs=1M count=511
         mkfs.vfat -F32 "$esp_img"

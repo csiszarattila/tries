@@ -78,13 +78,13 @@ EOF
 function create_disk()
 {
     build_uki_efi() {
-        mkdir -p "$BUILD/efi/"
+        mkdir -p "$BUILD/esp/EFI/Linux/"
 
         ukify build \
             --linux="$BUILD/linux/arch/x86/boot/bzImage" \
             --initrd="$BUILD/initramfs.cpio.gz" \
             --cmdline="console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=ramfs" \
-            --output="$BUILD/efi/UKI.EFI"
+            --output="$BUILD/esp/EFI/Linux/vmlinux-uki.efi"
     }
 
     create_disk_img() {
@@ -97,13 +97,13 @@ function create_disk()
     }
 
     make_esp_partition() {
+        mkdir -p "$BUILD/esp/EFI/BOOT/"
+        cp "$(nix-build '<nixpkgs>' -A systemd)/lib/systemd/boot/efi/systemd-bootx64.efi" "$BUILD/esp/EFI/BOOT/BOOTX64.EFI"
+
+
         dd if=/dev/zero of=$esp_img bs=1M count=511
-
         mkfs.vfat -F32 "$esp_img"
-        mmd -i "$esp_img" ::/EFI
-        mmd -i "$esp_img" ::/EFI/BOOT
-
-        mcopy -i "$esp_img" "$BUILD/efi/UKI.EFI" ::/EFI/BOOT/BOOTX64.EFI
+        mcopy -i "$esp_img" -s "$BUILD/esp"/* ::/
     }
 
     make_root_partition() {
@@ -121,7 +121,11 @@ function create_disk()
     local esp_img="$BUILD/disk/esp.img"
     local root_img="$BUILD/disk/root.img"
 
+    rm -rf "$BUILD/esp"
+    rm -rf "$BUILD/disk"
     mkdir -p "$BUILD/disk"
+    mkdir -p "$BUILD/esp"
+
     build_uki_efi
     create_disk_img
     make_esp_partition

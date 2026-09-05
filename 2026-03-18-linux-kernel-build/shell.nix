@@ -10,12 +10,11 @@ pkgs.mkShell {
     e2fsprogs
     parted
     qemu
+    systemd
     systemdUkify
     OVMF
   ];
   
-#! nix-shell -p coreutils cpio glibc.static dosfstools e2fsprogs mtools parted qemu systemdUkify OVMF nix musl
-
   OVMF_PATH = "${pkgs.OVMF.fd}";
 }
 

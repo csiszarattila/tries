@@ -8,6 +8,63 @@ BUILD="$ROOT/build"
 function build_linux()
 {
     cd "$BUILD/linux"
+
+    config_linux_build () {
+        #make tinyconfig
+
+        # Basic system and EFI setup
+        ./scripts/config --enable 64BIT
+        ./scripts/config --enable ACPI
+        ./scripts/config --enable EFI
+        ./scripts/config --enable EFI_STUB
+        ./scripts/config --enable PROC_FS
+        ./scripts/config --enable SYSFS
+        ./scripts/config --enable BINFMT_SCRIPT
+        ./scripts/config --enable BINFMT_ELF
+
+        # Initramfs with only GZIP support
+        ./scripts/config --enable BLK_DEV_INITRD
+        ./scripts/config --enable RD_GZIP
+        ./scripts/config --enable CONFIG_INITRAMFS_COMPRESSION_GZIP
+        ./scripts/config --enable INITRAMFS_PRESERVE_MTIME
+
+        # Disable other algorithms to save space
+        ./scripts/config --disable RD_BZIP2
+        ./scripts/config --disable RD_LZMA
+        ./scripts/config --disable RD_XZ
+        ./scripts/config --disable RD_LZO
+        ./scripts/config --disable RD_LZ4
+        ./scripts/config --disable RD_ZSTD
+
+        # Disable other initramfs compressions
+        ./scripts/config --disable INITRAMFS_COMPRESSION_NONE
+        ./scripts/config --disable INITRAMFS_COMPRESSION_BZIP2
+        ./scripts/config --disable INITRAMFS_COMPRESSION_LZMA
+        ./scripts/config --disable INITRAMFS_COMPRESSION_XZ
+        ./scripts/config --disable INITRAMFS_COMPRESSION_LZO
+        ./scripts/config --disable INITRAMFS_COMPRESSION_LZ4
+        ./scripts/config --disable INITRAMFS_COMPRESSION_ZSTD
+
+        # Soros port és TTY konzol támogatása (console=ttyS0)
+        ./scripts/config --enable CONFIG_SERIAL_8250
+        ./scripts/config --enable CONFIG_SERIAL_8250_CONSOLE
+        ./scripts/config --enable CONFIG_TTY
+
+        # Korai kernel üzenetek soros porton (earlyprintk=serial,ttyS0,115200)
+        ./scripts/config --enable CONFIG_EARLY_PRINTK
+
+        # Beépített RAMFS / TMPFS támogatás (rootfstype=ramfs)
+        ./scripts/config --enable CONFIG_RAMFS
+        ./scripts/config --enable CONFIG_TMPFS
+
+        # Kernel log szint és debug opciók (loglevel=7)
+        ./scripts/config --enable CONFIG_PRINTK
+
+        make olddefconfig
+    }
+
+    config_linux_build
+
     make -j$(nproc) bzImage
 }
 

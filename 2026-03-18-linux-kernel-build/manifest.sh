@@ -15,12 +15,24 @@ function build_linux()
         # Basic system and EFI setup
         ./scripts/config --enable 64BIT
         ./scripts/config --enable ACPI
+        ./scripts/config --enable BLOCK
         ./scripts/config --enable EFI
         ./scripts/config --enable EFI_STUB
         ./scripts/config --enable PROC_FS
+        ./scripts/config --enable DEVTMPFS
         ./scripts/config --enable SYSFS
         ./scripts/config --enable BINFMT_SCRIPT
         ./scripts/config --enable BINFMT_ELF
+        ./scripts/config --enable PCI
+
+        # VirtIO Bus
+        ./scripts/config --enable VIRTIO
+        ./scripts/config --enable VIRTIO_MENU
+        ./scripts/config --enable VIRTIO_PCI
+
+        # VirtIO Disk
+        ./scripts/config --enable BLK_DEV
+        ./scripts/config --enable VIRTIO_BLK
 
         # Initramfs with only GZIP support
         ./scripts/config --enable BLK_DEV_INITRD

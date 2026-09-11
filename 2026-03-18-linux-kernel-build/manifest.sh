@@ -4,75 +4,26 @@ set -euo pipefail
 
 ROOT="$(pwd)"
 BUILD="$ROOT/build"
+SRC="$ROOT/src"
 
-function build_linux()
+function build_kernel()
 {
-    cd "$BUILD/linux"
+    cd "$BUILD"
+    
+    if [ ! -d kernel ]; then
+        wget https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.4.tar.xz
+        tar -xf linux-7.2.4.tar.xz
+        mv linux-7.2.4 kernel
+        rm -rf linux-7.2.4
+    fi
 
+    cd "$BUILD/kernel"
+    
     config_linux_build () {
-        #make tinyconfig
-
-        # Basic system and EFI setup
-        ./scripts/config --enable 64BIT
-        ./scripts/config --enable ACPI
-        ./scripts/config --enable BLOCK
-        ./scripts/config --enable EFI
-        ./scripts/config --enable EFI_STUB
-        ./scripts/config --enable PROC_FS
-        ./scripts/config --enable DEVTMPFS
-        ./scripts/config --enable SYSFS
-        ./scripts/config --enable BINFMT_SCRIPT
-        ./scripts/config --enable BINFMT_ELF
-        ./scripts/config --enable PCI
-
-        # VirtIO Bus
-        ./scripts/config --enable VIRTIO
-        ./scripts/config --enable VIRTIO_MENU
-        ./scripts/config --enable VIRTIO_PCI
-
-        # VirtIO Disk
-        ./scripts/config --enable BLK_DEV
-        ./scripts/config --enable VIRTIO_BLK
-
-        # Initramfs with only GZIP support
-        ./scripts/config --enable BLK_DEV_INITRD
-        ./scripts/config --enable RD_GZIP
-        ./scripts/config --enable CONFIG_INITRAMFS_COMPRESSION_GZIP
-        ./scripts/config --enable INITRAMFS_PRESERVE_MTIME
-
-        # Disable other algorithms to save space
-        ./scripts/config --disable RD_BZIP2
-        ./scripts/config --disable RD_LZMA
-        ./scripts/config --disable RD_XZ
-        ./scripts/config --disable RD_LZO
-        ./scripts/config --disable RD_LZ4
-        ./scripts/config --disable RD_ZSTD
-
-        # Disable other initramfs compressions
-        ./scripts/config --disable INITRAMFS_COMPRESSION_NONE
-        ./scripts/config --disable INITRAMFS_COMPRESSION_BZIP2
-        ./scripts/config --disable INITRAMFS_COMPRESSION_LZMA
-        ./scripts/config --disable INITRAMFS_COMPRESSION_XZ
-        ./scripts/config --disable INITRAMFS_COMPRESSION_LZO
-        ./scripts/config --disable INITRAMFS_COMPRESSION_LZ4
-        ./scripts/config --disable INITRAMFS_COMPRESSION_ZSTD
-
-        # Soros port és TTY konzol támogatása (console=ttyS0)
-        ./scripts/config --enable CONFIG_SERIAL_8250
-        ./scripts/config --enable CONFIG_SERIAL_8250_CONSOLE
-        ./scripts/config --enable CONFIG_TTY
-
-        # Korai kernel üzenetek soros porton (earlyprintk=serial,ttyS0,115200)
-        ./scripts/config --enable CONFIG_EARLY_PRINTK
-
-        # Beépített RAMFS / TMPFS támogatás (rootfstype=ramfs)
-        ./scripts/config --enable CONFIG_RAMFS
-        ./scripts/config --enable CONFIG_TMPFS
-
-        # Kernel log szint és debug opciók (loglevel=7)
-        ./scripts/config --enable CONFIG_PRINTK
-
-        make olddefconfig
+        if [ ! -f "$BUILD/kernel/defconfig" ]; then
+            ln -s "$SRC/kernel/defconfig" "$BUILD/kernel/defconfig"
+            make olddefconfig
+        fi
     }
 
     config_linux_build
@@ -89,32 +40,12 @@ function build_busybox()
         mv busybox-1.38.0 busybox
     fi
 
-    cd $BUILD/busybox
-    make allnoconfig
+    cd "$BUILD/busybox"
 
-    sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-    sed -i 's/# CONFIG_ASH is not set/CONFIG_ASH=y/' .config
-    sed -i 's/# CONFIG_MOUNT is not set/CONFIG_MOUNT=y/' .config
-    sed -i 's/# CONFIG_ECHO is not set/CONFIG_ECHO=y/' .config
-    sed -i 's/# CONFIG_LS is not set/CONFIG_LS=y/' .config
-    sed -i 's/# CONFIG_CAT is not set/CONFIG_CAT=y/' .config
-    sed -i 's/# CONFIG_REBOOT is not set/CONFIG_REBOOT=y/' .config
-    sed -i 's/# CONFIG_POWEROFF is not set/CONFIG_POWEROFF=y/' .config 
-    # PS command
-    sed -i 's/# CONFIG_PS is not set/CONFIG_PS=y/' .config
-    sed -i 's/# CONFIG_FEATURE_PS_WIDE is not set/CONFIG_FEATURE_PS_WIDE=y/' .config
-    sed -i 's/# CONFIG_FEATURE_PS_TIME is not set/CONFIG_FEATURE_PS_TIME=y/' .config
-    #sed -i 's/# CONFIG_DESKTOP is not set/CONFIG_DESKTOP=y/' .config
-    sed -i 's/# CONFIG_CTTYHACK is not set/CONFIG_CTTYHACK=y/' .config
-    sed -i 's/# CONFIG_FEATURE_SHOW_THREADS is not set/CONFIG_FEATURE_SHOW_THREADS=y/' .config
+    if [ ! -f "$BUILD/busybox/.config" ]; then
+        cp "$SRC/busybox/config" "$BUILD/busybox/.config"
+    fi
 
-    sed -i 's/# CONFIG_BLKID is not set/CONFIG_BLKID=y/' .config
-    sed -i 's/# CONFIG_BLKID_TYPE is not set/CONFIG_BLKID_TYPE=y/' .config
-    sed -i 's/# CONFIG_FDISK is not set/CONFIG_FDISK=y/' .config
-    sed -i 's/# CONFIG_FDISK_SUPPORT_LARGE_DISKS is not set/CONFIG_FDISK_SUPPORT_LARGE_DISKS=y/' .config
-    sed -i 's/# CONFIG_FEATURE_GPT_LABEL is not set/CONFIG_FEATURE_GPT_LABEL=y/' .config
-
-    make oldconfig
     make -j$(nproc)
 }
 
@@ -150,7 +81,7 @@ function create_disk()
         mkdir -p "$BUILD/esp/EFI/Linux/"
 
         ukify build \
-            --linux="$BUILD/linux/arch/x86/boot/bzImage" \
+            --linux="$BUILD/kernel/arch/x86/boot/bzImage" \
             --initrd="$BUILD/initramfs.cpio.gz" \
             --cmdline="console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=ramfs" \
             --output="$BUILD/esp/EFI/Linux/vmlinux-uki.efi"
@@ -225,8 +156,8 @@ while [[ $# -gt 0 ]]; do
             build_busybox
             shift 1
             ;;
-        --build-linux)
-            build_linux
+        --build-kernel)
+            build_kernel
             shift 1
             ;;
         --create-disk)

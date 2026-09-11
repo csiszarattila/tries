@@ -60,6 +60,8 @@ function create_initramfs()
     cd $RAMFS
     mkdir -p bin dev proc sys
 
+    hostname bbox
+
     cat << 'EOF' > init
 #!/bin/sh
 
@@ -144,6 +146,8 @@ function run() {
     qemu-system-x86_64 -m 2048M \
         -machine q35,firmware=$OVMF_PATH/FV/OVMF.fd \
         -drive file="$BUILD/disk/disk.img",if=virtio,format=raw \
+        -netdev tap,id=net0,ifname=qemu-machineA,script=no,downscript=no \
+        -device virtio-net-pci,netdev=net0 \
         -nographic
 }
 

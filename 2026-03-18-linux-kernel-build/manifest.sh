@@ -19,14 +19,76 @@ function build_kernel()
 
     cd "$BUILD/kernel"
     
-    config_linux_build () {
-        if [ ! -f "$BUILD/kernel/defconfig" ]; then
-            ln -s "$SRC/kernel/defconfig" "$BUILD/kernel/defconfig"
-            make olddefconfig
-        fi
+    config_kernel_build () {
+        make tinyconfig
+        
+        # Enable 64-bit support (if on x86_64)
+        scripts/config --enable 64BIT
+
+        # Essential base
+        ./scripts/config --enable PRINTK
+        ./scripts/config --enable EARLY_PRINTK
+        ./scripts/config --enable ACPI
+        ./scripts/config --enable PCI
+
+        # Serial Port and tty (console=ttyS0)
+        ./scripts/config --enable SERIAL_8250
+        ./scripts/config --enable SERIAL_8250_CONSOLE
+        ./scripts/config --enable TTY
+        
+        # EFI support
+        ./scripts/config --enable EFI
+        ./scripts/config --enable EFI_STUB
+
+        # Filesystems
+        ./scripts/config --enable BLOCK
+        ./scripts/config --enable BLK_DEV
+        ./scripts/config --enable PROC_FS
+        ./scripts/config --enable SYSFS
+        ./scripts/config --enable TMPFS
+        ./scripts/config --enable DEVTMPFS 
+        ./scripts/config --enable DEVTMPFS_MOUNT 
+
+        # Init script bin format
+        ./scripts/config --enable BINFMT_SCRIPT
+        ./scripts/config --enable BINFMT_ELF
+
+        # VirtIO Bus
+        ./scripts/config --enable VIRTIO
+        ./scripts/config --enable VIRTIO_MENU
+        ./scripts/config --enable VIRTIO_BLK
+        ./scripts/config --enable VIRTIO_PCI
+        ./scripts/config --enable VIRTIO_MMIO
+        ./scripts/config --enable VIRTIO_NET
+
+        # Initramfs
+        ./scripts/config --enable BLK_DEV_INITRD
+        ./scripts/config --enable RD_GZIP
+        ./scripts/config --enable INITRAMFS_COMPRESSION_GZIP
+        ./scripts/config --enable INITRAMFS_PRESERVE_MTIME
+
+        # Networking
+        ./scripts/config --enable NET
+        ./scripts/config --enable INET
+        ./scripts/config --enable PACKET
+        ./scripts/config --enable NETDEVICES
+        ./scripts/config --enable ETHERNET
+
+        # Wireless & Bluetooth support
+        ./scripts/config --disable IPV6
+        ./scripts/config --disable WIRELESS
+        ./scripts/config --disable WLAN
+        ./scripts/config --disable WIRELESS_EXT
+        ./scripts/config --disable CFG80211
+        ./scripts/config --disable MAC80211
+        ./scripts/config --disable BT
+        ./scripts/config --disable RFKILL
+        ./scripts/config --disable SOUND
+
+        make olddefconfig
     }
 
-    config_linux_build
+    config_kernel_build
 
     make -j$(nproc) bzImage
 }
@@ -40,12 +102,32 @@ function build_busybox()
         mv busybox-1.38.0 busybox
     fi
 
-    cd "$BUILD/busybox"
+    cd $BUILD/busybox
+    make allnoconfig
 
-    if [ ! -f "$BUILD/busybox/.config" ]; then
-        cp "$SRC/busybox/config" "$BUILD/busybox/.config"
-    fi
+    sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+    sed -i 's/# CONFIG_ASH is not set/CONFIG_ASH=y/' .config
+    sed -i 's/# CONFIG_MOUNT is not set/CONFIG_MOUNT=y/' .config
+    sed -i 's/# CONFIG_ECHO is not set/CONFIG_ECHO=y/' .config
+    sed -i 's/# CONFIG_LS is not set/CONFIG_LS=y/' .config
+    sed -i 's/# CONFIG_CAT is not set/CONFIG_CAT=y/' .config
+    sed -i 's/# CONFIG_REBOOT is not set/CONFIG_REBOOT=y/' .config
+    sed -i 's/# CONFIG_POWEROFF is not set/CONFIG_POWEROFF=y/' .config 
+    # PS command
+    sed -i 's/# CONFIG_PS is not set/CONFIG_PS=y/' .config
+    sed -i 's/# CONFIG_FEATURE_PS_WIDE is not set/CONFIG_FEATURE_PS_WIDE=y/' .config
+    sed -i 's/# CONFIG_FEATURE_PS_TIME is not set/CONFIG_FEATURE_PS_TIME=y/' .config
+    #sed -i 's/# CONFIG_DESKTOP is not set/CONFIG_DESKTOP=y/' .config
+    sed -i 's/# CONFIG_CTTYHACK is not set/CONFIG_CTTYHACK=y/' .config
+    sed -i 's/# CONFIG_FEATURE_SHOW_THREADS is not set/CONFIG_FEATURE_SHOW_THREADS=y/' .config
 
+    sed -i 's/# CONFIG_BLKID is not set/CONFIG_BLKID=y/' .config
+    sed -i 's/# CONFIG_BLKID_TYPE is not set/CONFIG_BLKID_TYPE=y/' .config
+    sed -i 's/# CONFIG_FDISK is not set/CONFIG_FDISK=y/' .config
+    sed -i 's/# CONFIG_FDISK_SUPPORT_LARGE_DISKS is not set/CONFIG_FDISK_SUPPORT_LARGE_DISKS=y/' .config
+    sed -i 's/# CONFIG_FEATURE_GPT_LABEL is not set/CONFIG_FEATURE_GPT_LABEL=y/' .config
+
+    make oldconfig
     make -j$(nproc)
 }
 
@@ -85,7 +167,7 @@ function create_disk()
         ukify build \
             --linux="$BUILD/kernel/arch/x86/boot/bzImage" \
             --initrd="$BUILD/initramfs.cpio.gz" \
-            --cmdline="console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=ramfs" \
+            --cmdline="console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=tmpfs" \
             --output="$BUILD/esp/EFI/Linux/vmlinux-uki.efi"
     }
 
@@ -100,7 +182,7 @@ function create_disk()
 
     make_esp_partition() {
         mkdir -p "$BUILD/esp/EFI/BOOT/"
-        cp "$(nix-build '<nixpkgs>' -A systemd)/lib/systemd/boot/efi/systemd-bootx64.efi" "$BUILD/esp/EFI/BOOT/BOOTX64.EFI"
+        cp "$(nix-build '<nixpkgs>' -A systemd.boot)/lib/systemd/boot/efi/systemd-bootx64.efi" "$BUILD/esp/EFI/BOOT/BOOTX64.EFI"
 
         mkdir -p "$BUILD/esp/loader/"
         cat <<EOF > "$BUILD/esp/loader/loader.conf"
@@ -151,6 +233,19 @@ function run() {
         -nographic
 }
 
+function runB() {
+    OVMF_PATH=$(nix-build '<nixpkgs>' -A OVMF.fd --no-out-link)
+
+    cp "$BUILD/disk/disk.img" "$BUILD/disk/diskB.img"
+
+    qemu-system-x86_64 -m 2048M \
+        -machine q35,firmware=$OVMF_PATH/FV/OVMF.fd \
+        -drive file="$BUILD/disk/diskB.img",if=virtio,format=raw \
+        -netdev tap,id=net0,ifname=qemu-machineB,script=no,downscript=no \
+        -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:57 \
+        -nographic
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build-busybox)
@@ -164,6 +259,10 @@ while [[ $# -gt 0 ]]; do
             build_kernel
             shift 1
             ;;
+        --build-systemd)
+            build_systemd
+            shift 1
+            ;;
         --create-disk)
             create_disk
             shift 1
@@ -174,6 +273,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -r|--run)
             run
+            shift 1
+            ;;
+        --runB)
+            runB
             shift 1
             ;;
         *)

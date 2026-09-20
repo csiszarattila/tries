@@ -25,7 +25,11 @@ function build_kernel()
         # Enable 64-bit support (if on x86_64)
         scripts/config --enable 64BIT
 
-        # Essential base
+        # Essential base: threads/sync (systemd aborts without FUTEX:
+        # "The futex facility returned an unexpected error code.")
+        ./scripts/config --enable FUTEX
+        ./scripts/config --enable FUTEX_PI
+        ./scripts/config --enable EVENTFD
         ./scripts/config --enable PRINTK
         ./scripts/config --enable EARLY_PRINTK
         ./scripts/config --enable ACPI
@@ -48,6 +52,11 @@ function build_kernel()
         ./scripts/config --enable TMPFS
         ./scripts/config --enable DEVTMPFS 
         ./scripts/config --enable DEVTMPFS_MOUNT 
+        ./scripts/config --enable MULTIUSER
+        ./scripts/config --enable SECURITY
+        ./scripts/config --enable AUDIT
+        ./scripts/config --enable TMPFS_POSIX_ACL
+        ./scripts/config --enable FILE_LOCKING
 
         # Init script bin format
         ./scripts/config --enable BINFMT_SCRIPT
@@ -73,6 +82,32 @@ function build_kernel()
         ./scripts/config --enable PACKET
         ./scripts/config --enable NETDEVICES
         ./scripts/config --enable ETHERNET
+        ./scripts/config --enable UNIX
+
+        # Namespaces (symbol is CONFIG_NAMESPACES, plural)
+        ./scripts/config --enable NAMESPACES
+        ./scripts/config --enable UTS_NS
+        ./scripts/config --enable IPC_NS
+        ./scripts/config --enable PID_NS
+        ./scripts/config --enable NET_NS
+        ./scripts/config --enable USER_NS
+
+        # cgroups
+        ./scripts/config --enable CGROUPS
+
+        # systemd needs these specific kernel features
+        scripts/config --enable INOTIFY_USER
+        scripts/config --enable SIGNALFD
+        scripts/config --enable TIMERFD
+        scripts/config --enable EPOLL
+        scripts/config --enable FHANDLE
+        scripts/config --enable FANOTIFY
+        scripts/config --enable AUTOFS_FS
+        scripts/config --enable PROC_SYSCTL
+        scripts/config --enable RSEQ
+        scripts/config --enable MEMBARRIER
+        scripts/config --enable SECCOMP
+        scripts/config --enable SECCOMP_FILTER
 
         # Wireless & Bluetooth support
         ./scripts/config --disable IPV6
@@ -91,6 +126,39 @@ function build_kernel()
     config_kernel_build
 
     make -j$(nproc) bzImage
+}
+
+function build_systemd()
+{
+    cd "$BUILD"
+    
+    if [ ! -d systemd ]; then
+        wget https://github.com/systemd/systemd-stable/archive/refs/tags/v255.22.tar.gz
+        tar -xf v255.22.tar.gz
+        mv systemd-stable-255.22 systemd
+    fi
+
+    cd "$BUILD/systemd"
+
+    meson setup build \
+        --prefix=/usr \
+        --buildtype=release \
+        -Dmode=release \
+        -Dwerror=false \
+        -Dman=disabled \
+        -Dhtml=disabled \
+        -Dtests=false \
+        -Dinitrd=true \
+        -Dfirst-boot-full-preset=false \
+        -Dopenssl=disabled \
+        -Dnss-systemd=false \
+        -Dnss-myhostname=false \
+        -Dnss-resolve=disabled \
+        -Dnss-mymachines=disabled \
+        -Dldconfig=false \
+
+    meson compile -C build
+    DESTDIR=$BUILD/systemd-build meson install -C build
 }
 
 function build_busybox()
@@ -138,24 +206,96 @@ function create_initramfs()
 
     cd $BUILD/busybox
     make CONFIG_PREFIX="$RAMFS" install
+
+    # Layout. We're building a HOST systemd, so all binaries already link
+    # against /usr/lib (with RPATH $ORIGIN/../..) and /lib64/ld-linux-x86-64.so.2.
+    # No patchelf, no stripping, no nix-store hacks: copy verbatim and supply the
+    # loader at the path the interpreter requests.
+    mkdir -p "$RAMFS"/{bin,dev,proc,sys,run,etc,lib64}
+    mkdir -p "$RAMFS"/usr/{bin,lib}
+    mkdir -p "$RAMFS"/usr/lib/{systemd,systemd/system}
+
+    cp -a /lib64/ld-linux-x86-64.so.2 "$RAMFS/lib64/"
+
+    # glibc + libgcc are needed explicitly because ldd resolves them
+    # against the host and never considers them "missing".
+    cp -a /usr/lib/libc.so.6   "$RAMFS/usr/lib/"
+    cp -a /usr/lib/libgcc_s.so.1 "$RAMFS/usr/lib/"
+
+    install_systemd() {
+        SYSD_SRC="$BUILD/systemd-build"
+        # Copy all shared libraries the systemd binary needs.
+        # Resolve the closure once via ldd on the BUILD-tree binary
+        # (not the initramfs one, whose $ORIGIN-relative RPATH only
+        # works under /usr/lib/systemd in the build dir), then copy
+        # every absolute path ldd reports.
+        ldd "$SYSD_SRC/usr/lib/systemd/systemd" 2>/dev/null \
+            | awk '/=> \// {print $3; next} /^\// {print $1}' \
+            | while read -r lib; do
+                [ -f "$lib" ] || continue
+                b=$(basename "$lib")
+                [ -e "$RAMFS/usr/lib/$b" ] && continue
+                cp -L "$lib" "$RAMFS/usr/lib/"
+              done
+
+        sysd_files=(
+            "$SYSD_SRC"/usr/lib/systemd/libsystemd-core-255.so
+            "$SYSD_SRC"/usr/lib/systemd/libsystemd-shared-255.so
+            "$SYSD_SRC"/usr/lib/systemd/systemd-executor
+        )
+
+        for sysd in "${sysd_files[@]}"; do
+            cp -L "$sysd" "$RAMFS/usr/lib/systemd/"
+
+            ldd "$sysd" 2>/dev/null \
+                | awk '/=> \// {print $3; next} /^\// {print $1}' \
+                | while read -r lib; do
+                    [ -f "$lib" ] || continue
+                    b=$(basename "$lib")
+                    [ -e "$RAMFS/usr/lib/$b" ] && continue
+                    cp -L "$lib" "$RAMFS/usr/lib/"
+                  done
+        done
+
+        ln -sf usr/lib/systemd/systemd "$RAMFS/init"
+
+        # Full tree: helpers (journald, udevd, ...), generators, units, generators.
+        # The tree contains relative symlinks (e.g. lib/systemd/systemd-udevd
+        # -> ../../bin/udevadm) so /usr/bin from the build must come along.
+        cp -a "$SYSD_SRC/usr/lib/systemd/systemd" "$RAMFS/usr/lib/systemd/"
+        #cp -a "$SYSD_SRC/usr/bin/." "$RAMFS/usr/bin/"
+
+        # Public libs shipped by the installed systemd tree. The ldd
+        # closure above already brought in the external deps (glibc,
+        # libaudit, libkmod, ...), but the internal ones (libsystemd,
+        # libudev, libnss_*) live here in usr/lib.
+        cp -a "$SYSD_SRC/usr/lib"/libsystemd.so* "$RAMFS/usr/lib/"
+        #cp -a "$SYSD_SRC/usr/lib"/libudev.so* "$RAMFS/usr/lib/"
+        #[ -d "$SYSD_SRC/usr/lib/udev" ]             && cp -a "$SYSD_SRC/usr/lib/udev"           "$RAMFS/usr/lib/"
+        #[ -d "$SYSD_SRC/usr/lib/tmpfiles.d" ]       && cp -a "$SYSD_SRC/usr/lib/tmpfiles.d"     "$RAMFS/usr/lib/"
+        #[ -d "$SYSD_SRC/usr/lib/sysusers.d" ]       && cp -a "$SYSD_SRC/usr/lib/sysusers.d"     "$RAMFS/usr/lib/"
+        #[ -d "$SYSD_SRC/usr/lib/modules-load.d" ]   && cp -a "$SYSD_SRC/usr/lib/modules-load.d" "$RAMFS/usr/lib/"
+        #[ -d "$SYSD_SRC/usr/lib/sysctl.d" ]         && cp -a "$SYSD_SRC/usr/lib/sysctl.d"       "$RAMFS/usr/lib/"
+        #[ -d "$SYSD_SRC/usr/lib/binfmt.d" ]         && cp -a "$SYSD_SRC/usr/lib/binfmt.d"       "$RAMFS/usr/lib/"
+
+        # Config so PID 1 detects initrd mode and loads the right units.
+        # cp -a "$SYSD_SRC/etc/systemd" "$RAMFS/etc/"
+        # cp -a "$SYSD_SRC/etc/udev"    "$RAMFS/etc/"
+        
+        cp -a "$SYSD_SRC/usr/lib/systemd/system/initrd.target" "$RAMFS/usr/lib/systemd/system/"
+        cp -a "$SYSD_SRC/usr/lib/systemd/system/emergency.target" "$RAMFS/usr/lib/systemd/system/"
+        cp -a "$SYSD_SRC/usr/lib/systemd/system/emergency.service" "$RAMFS/usr/lib/systemd/system/"
+        cp -a "$SYSD_SRC/usr/lib/systemd/system/rescue.target" "$RAMFS/usr/lib/systemd/system/"
+        cp -a "$SYSD_SRC/usr/lib/systemd/system/rescue.service" "$RAMFS/usr/lib/systemd/system/"
     
+
+
+
+    }
+
+    install_systemd
+
     cd $RAMFS
-    mkdir -p bin dev proc sys
-
-    hostname bbox
-
-    cat << 'EOF' > init
-#!/bin/sh
-
-mount -t devtmpfs devtmpfs /dev
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-
-exec /bin/sh
-EOF
-
-    chmod +x init
-
     find . -print0 | cpio --null -ov --format=newc | gzip -9 > "$BUILD/initramfs.cpio.gz"
 }
 
@@ -167,7 +307,7 @@ function create_disk()
         ukify build \
             --linux="$BUILD/kernel/arch/x86/boot/bzImage" \
             --initrd="$BUILD/initramfs.cpio.gz" \
-            --cmdline="console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=tmpfs" \
+            --cmdline="systemd.log_level=debug systemd.log_target=console console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=tmpfs" \
             --output="$BUILD/esp/EFI/Linux/vmlinux-uki.efi"
     }
 
@@ -196,9 +336,10 @@ EOF
     }
 
     make_root_partition() {
-        dd if=/dev/zero of=$root_img bs=1M count=$((2048-511-1))
-        
-        mkfs.ext4 "$root_img"
+        local root_bytes
+        root_bytes=$(parted -m "$disk_img" unit B print | awk -F: '$1==2 {print $4}' | tr -d 'B')
+        dd if=/dev/zero of="$root_img" bs=1 count=0 seek="$root_bytes"   # sparse-allocate exact size
+        mkfs.ext4 "$root_img" 
     }
 
     write_partitions_to_disk() {
@@ -239,10 +380,9 @@ function runB() {
     cp "$BUILD/disk/disk.img" "$BUILD/disk/diskB.img"
 
     qemu-system-x86_64 -m 2048M \
-        -machine q35,firmware=$OVMF_PATH/FV/OVMF.fd \
-        -drive file="$BUILD/disk/diskB.img",if=virtio,format=raw \
-        -netdev tap,id=net0,ifname=qemu-machineB,script=no,downscript=no \
-        -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:57 \
+        -kernel "$BUILD/kernel/arch/x86/boot/bzImage" \
+        -initrd "$BUILD/initramfs.cpio.gz" \
+        -append "systemd.log_level=debug systemd.log_target=console console=ttyS0 earlyprintk=serial,ttyS0,115200 loglevel=7 rootfstype=tmpfs rd.systemd.unit=default.service" \
         -nographic
 }
 

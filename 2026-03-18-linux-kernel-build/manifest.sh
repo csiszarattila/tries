@@ -194,6 +194,9 @@ function build_busybox()
     sed -i 's/# CONFIG_FDISK is not set/CONFIG_FDISK=y/' .config
     sed -i 's/# CONFIG_FDISK_SUPPORT_LARGE_DISKS is not set/CONFIG_FDISK_SUPPORT_LARGE_DISKS=y/' .config
     sed -i 's/# CONFIG_FEATURE_GPT_LABEL is not set/CONFIG_FEATURE_GPT_LABEL=y/' .config
+    sed -i 's/# CONFIG_INSTALL is not set/CONFIG_INSTALL=y/' .config
+    sed -i 's/# CONFIG_BUSYBOX is not set/CONFIG_BUSYBOX=y/' .config
+    sed -i 's/# CONFIG_FEATURE_INSTALLER is not set/CONFIG_FEATURE_INSTALLER=y/' .config
 
     make oldconfig
     make -j$(nproc)
@@ -204,9 +207,6 @@ function create_initramfs()
     RAMFS="$BUILD/initramfs"
     rm -rf $RAMFS
 
-    cd $BUILD/busybox
-    make CONFIG_PREFIX="$RAMFS" install
-
     # Layout. We're building a HOST systemd, so all binaries already link
     # against /usr/lib (with RPATH $ORIGIN/../..) and /lib64/ld-linux-x86-64.so.2.
     # No patchelf, no stripping, no nix-store hacks: copy verbatim and supply the
@@ -214,13 +214,21 @@ function create_initramfs()
     mkdir -p "$RAMFS"/{bin,dev,proc,sys,run,etc,lib64}
     mkdir -p "$RAMFS"/usr/{bin,lib}
     mkdir -p "$RAMFS"/usr/lib/{systemd,systemd/system}
-
+    
     cp -a /lib64/ld-linux-x86-64.so.2 "$RAMFS/lib64/"
 
     # glibc + libgcc are needed explicitly because ldd resolves them
     # against the host and never considers them "missing".
     cp -a /usr/lib/libc.so.6   "$RAMFS/usr/lib/"
     cp -a /usr/lib/libgcc_s.so.1 "$RAMFS/usr/lib/"
+
+    install_busybox() {
+        cp "$BUILD/busybox/busybox" "$RAMFS/usr/bin/busybox"
+
+        for applet in $("$BUILD/busybox/busybox" --list); do
+            ln -s busybox "$RAMFS/usr/bin/$applet"
+        done
+    }
 
     install_systemd() {
         SYSD_SRC="$BUILD/systemd-build"
@@ -298,7 +306,7 @@ Wants=sysinit.target
 [Service]
 Environment=HOME=/ TERM=linux
 WorkingDirectory=/
-ExecStart=-/bin/sh
+ExecStart=-/usr/bin/sh
 StandardInput=tty
 StandardOutput=tty
 StandardError=tty
@@ -321,6 +329,7 @@ EOF
         touch "$RAMFS/etc/initrd-release"
     }
 
+    install_busybox
     install_systemd
 
     cd $RAMFS

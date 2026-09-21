@@ -288,9 +288,37 @@ function create_initramfs()
         cp -a "$SYSD_SRC/usr/lib/systemd/system/rescue.target" "$RAMFS/usr/lib/systemd/system/"
         cp -a "$SYSD_SRC/usr/lib/systemd/system/rescue.service" "$RAMFS/usr/lib/systemd/system/"
     
+    cat <<EOF > "$RAMFS/usr/lib/systemd/system/default.service"
+[Unit]
+Description=Saját RAM-OS Shell Indító
+DefaultDependencies=no
+After=sysinit.target
+Wants=sysinit.target
 
+[Service]
+Environment=HOME=/ TERM=linux
+WorkingDirectory=/
+ExecStart=-/bin/sh
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/console
+TTYReset=yes
+TTYVHangup=yes
+Type=idle
 
+[Install]
+WantedBy=default.target
+EOF
 
+    cat <<EOF > "$RAMFS/etc/os-release"
+NAME="HyprOS"
+VERSION="2026.9"
+ID=hypros
+VERSION_ID=2026.9
+VERSION_CODENAME="aenea"
+EOF
+        touch "$RAMFS/etc/initrd-release"
     }
 
     install_systemd
